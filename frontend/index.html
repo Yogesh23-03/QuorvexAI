@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F4F6FA" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0A0C11" />
+    <meta
+      name="description"
+      content="QuorvexAI is a robotic multi-agent AI platform: chat, web search, coding with a live sandbox, PDF and slide generation, and image creation — orchestrated by LangGraph."
+    />
+    <meta property="og:title" content="QuorvexAI — Multi-Agent AI Command Center" />
+    <meta
+      property="og:description"
+      content="Six specialist AI agents in one robotic command center: chat, search, code, documents, decks and images."
+    />
+    <meta property="og:type" content="website" />
+    <script>
+      // Set the theme class before first paint so there is never a wrong-theme flash.
+      (function () {
+        try {
+          // Only light/dark are stored; the OS preference seeds the first visit.
+          var stored = localStorage.getItem("quorvex-theme");
+          var dark =
+            stored === "dark" ||
+            (stored !== "light" &&
+              stored !== "dark" &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.classList.toggle("dark", dark);
+          document.documentElement.dataset.theme = dark ? "dark" : "light";
+        } catch (error) {
+          document.documentElement.classList.add("dark");
+        }
+      })();
+    </script>
+    <title>QuorvexAI — Multi-Agent AI Command Center</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Fonts load async; the local fallback stack paints first. -->
+    <link
+      rel="preload"
+      as="style"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap"
+    />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap"
+      media="print"
+      onload="this.media = 'all'"
+    />
+    <noscript>
+      <link
+        rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap"
+      />
+    </noscript>
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- Razorpay Checkout is injected on demand by features/billing.js. -->
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

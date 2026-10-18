@@ -1,0 +1,11 @@
+User-agent: *
+Allow: /
+
+# Private, session-only surfaces: nothing here is useful to a crawler.
+Disallow: /chat
+Disallow: /settings
+Disallow: /login
+Disallow: /signup
+Disallow: /forgot-password
+Disallow: /reset-password
+Disallow: /api/
