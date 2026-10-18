@@ -1,0 +1,34 @@
+{
+  "name": "@quorvexai/auth-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "QuorvexAI auth service: Firebase verification, sessions, credits and plans",
+  "main": "index.js",
+  "type": "module",
+  "engines": {
+    "node": ">=20.10.0"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "npm test --prefix ../.. -- tests/auth",
+    "lint": "npm run lint --prefix ../..",
+    "format": "npm run format --prefix ../..",
+    "format:check": "npm run format:check --prefix ../.."
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^18.0.6",
+    "express": "^5.2.1",
+    "firebase-admin": "^14.5.0",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^9.11.0",
+    "nodemailer": "^6.10.1",
+    "pino": "^10.4.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}

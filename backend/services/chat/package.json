@@ -1,0 +1,28 @@
+{
+  "name": "@quorvexai/chat-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "QuorvexAI chat service: conversations, messages and artifacts",
+  "main": "index.js",
+  "type": "module",
+  "engines": {
+    "node": ">=20.10.0"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "npm test --prefix ../.. -- tests/chat",
+    "lint": "npm run lint --prefix ../..",
+    "format": "npm run format --prefix ../..",
+    "format:check": "npm run format:check --prefix ../.."
+  },
+  "dependencies": {
+    "dotenv": "^18.0.6",
+    "express": "^5.2.1",
+    "mongoose": "^9.11.1",
+    "pino": "^10.4.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}

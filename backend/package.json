@@ -1,0 +1,49 @@
+{
+  "name": "quorvexai-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "QuorvexAI MERN microservices: gateway + auth, chat, agent and billing services",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20.10.0"
+  },
+  "workspaces": [
+    "gateway",
+    "services/*"
+  ],
+  "scripts": {
+    "install:all": "npm install",
+    "dev": "concurrently -k -n gateway,auth,chat,agent,billing -c cyan,magenta,green,yellow,blue \"npm:dev:gateway\" \"npm:dev:auth\" \"npm:dev:chat\" \"npm:dev:agent\" \"npm:dev:billing\"",
+    "dev:gateway": "npm run dev --workspace=@quorvexai/gateway",
+    "dev:auth": "npm run dev --workspace=@quorvexai/auth-service",
+    "dev:chat": "npm run dev --workspace=@quorvexai/chat-service",
+    "dev:agent": "npm run dev --workspace=@quorvexai/agent-service",
+    "dev:billing": "npm run dev --workspace=@quorvexai/billing-service",
+    "start": "concurrently -k -n gateway,auth,chat,agent,billing -c cyan,magenta,green,yellow,blue \"npm run start --workspace=@quorvexai/gateway\" \"npm run start --workspace=@quorvexai/auth-service\" \"npm run start --workspace=@quorvexai/chat-service\" \"npm run start --workspace=@quorvexai/agent-service\" \"npm run start --workspace=@quorvexai/billing-service\"",
+    "dev:all": "bash scripts/dev-up.sh",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:sync-indexes": "node scripts/sync-indexes.js",
+    "db:check-indexes": "DRY_RUN=1 node scripts/sync-indexes.js",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"**/*.{js,json,md}\"",
+    "format:check": "prettier --check \"**/*.{js,json,md}\""
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "ioredis": "^6.0.0",
+    "mongoose": "^9.11.1",
+    "pino": "^10.4.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "concurrently": "^10.0.6",
+    "eslint": "^10.13.0",
+    "globals": "^17.12.0",
+    "prettier": "^3.9.10",
+    "supertest": "^7.3.1",
+    "vitest": "^5.0.5"
+  }
+}

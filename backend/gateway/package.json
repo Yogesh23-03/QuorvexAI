@@ -1,0 +1,32 @@
+{
+  "name": "@quorvexai/gateway",
+  "version": "1.0.0",
+  "private": true,
+  "description": "QuorvexAI API gateway (express-http-proxy)",
+  "main": "index.js",
+  "type": "module",
+  "engines": {
+    "node": ">=20.10.0"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "npm test --prefix .. -- tests/gateway",
+    "lint": "npm run lint --prefix ..",
+    "format": "npm run format --prefix ..",
+    "format:check": "npm run format:check --prefix .."
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.6",
+    "express": "^5.2.1",
+    "express-http-proxy": "^2.1.2",
+    "jsonwebtoken": "^9.0.3",
+    "pino": "^10.4.0",
+    "pino-http": "^11.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}
