@@ -1,0 +1,10 @@
+process.env.NODE_ENV = "test";
+process.env.LOG_LEVEL = "silent";
+process.env.REDIS_URL = process.env.TEST_REDIS_URL || "redis://127.0.0.1:6379";
+process.env.RAZORPAY_KEY_ID = "rzp_test_placeholder";
+process.env.RAZORPAY_KEY_SECRET = "test_secret_placeholder";
+process.env.AUTH_SERVICE = "http://127.0.0.1:9001";
+process.env.CHAT_SERVICE = "http://127.0.0.1:9002";
+process.env.AGENT_SERVICE = "http://127.0.0.1:9003";
+process.env.BILLING_SERVICE = "http://127.0.0.1:9004";
+process.env.FRONTEND_URL = "http://localhost:5173";

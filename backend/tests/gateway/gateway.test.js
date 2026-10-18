@@ -1,0 +1,145 @@
+import http from "http";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import request from "supertest";
+import redis from "../../shared/redis/redis.js";
+
+const received = [];
+
+function startUpstream(name, port) {
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk.toString();
+    });
+    req.on("end", () => {
+      const record = {
+        name,
+        method: req.method,
+        url: req.url,
+        userId: req.headers["x-user-id"] || null,
+        requestId: req.headers["x-request-id"] || null,
+        body: body || null,
+      };
+      received.push(record);
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(record));
+    });
+  });
+  return new Promise((resolve) => server.listen(port, "127.0.0.1", () => resolve(server)));
+}
+
+const SESSION_ID = "gateway-test-session";
+const USER_ID = "68a1f0000000000000000001";
+
+let app;
+const servers = [];
+
+beforeAll(async () => {
+  servers.push(await startUpstream("auth", 9001));
+  servers.push(await startUpstream("chat", 9002));
+  servers.push(await startUpstream("agent", 9003));
+  servers.push(await startUpstream("billing", 9004));
+
+  await redis.set(
+    `session-${SESSION_ID}`,
+    JSON.stringify({ userId: USER_ID, name: "Gateway Tester", plan: "free", credits: 42 }),
+    "EX",
+    60,
+  );
+
+  const { createApp } = await import("../../gateway/app.js");
+  app = createApp();
+});
+
+afterAll(async () => {
+  await redis.del(`session-${SESSION_ID}`);
+  await Promise.all(servers.map((server) => new Promise((resolve) => server.close(resolve))));
+});
+
+const authed = (req) => req.set("Cookie", `session=${SESSION_ID}`);
+
+describe("gateway routing", () => {
+  it("routes /api/chat/* to the chat service with the user id and request id", async () => {
+    const res = await authed(request(app).get("/api/chat/get-conversations"));
+
+    expect(res.status).toBe(200);
+    const record = received.at(-1);
+    expect(record.name).toBe("chat");
+    expect(record.url).toBe("/get-conversations");
+    expect(record.userId).toBe(USER_ID);
+    expect(record.requestId).toBeTruthy();
+  });
+
+  it("routes /api/agent/* to the agent service and forwards the JSON body", async () => {
+    const res = await authed(
+      request(app)
+        .post("/api/agent/chat")
+        .send({ prompt: "build a site", conversationId: "abc", agent: "coding" }),
+    );
+
+    expect(res.status).toBe(200);
+    const record = received.at(-1);
+    expect(record.name).toBe("agent");
+    expect(record.method).toBe("POST");
+    expect(JSON.parse(record.body)).toMatchObject({ prompt: "build a site", agent: "coding" });
+  });
+
+  it("routes /api/billing/* to the billing service", async () => {
+    await authed(request(app).post("/api/billing/create").send({ plan: "pro" }));
+    expect(received.at(-1).name).toBe("billing");
+  });
+
+  it("lets login through without a session", async () => {
+    const res = await request(app).post("/api/auth/login").send({ token: "abc" });
+    expect(res.status).toBe(200);
+    expect(received.at(-1).name).toBe("auth");
+  });
+
+  it("serves /api/me from the auth service so credits are never stale", async () => {
+    const res = await authed(request(app).get("/api/me"));
+    expect(res.status).toBe(200);
+    expect(received.at(-1).name).toBe("auth");
+    expect(received.at(-1).url).toBe("/me");
+  });
+});
+
+describe("gateway protection", () => {
+  it("rejects a protected route without a session", async () => {
+    const res = await request(app).get("/api/chat/get-conversations");
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe("UNAUTHORIZED");
+  });
+
+  it("rejects an unknown session", async () => {
+    const res = await request(app).get("/api/chat/get-conversations").set("Cookie", "session=nope");
+    expect(res.status).toBe(401);
+    expect(res.body.error.message).toMatch(/expired/i);
+  });
+
+  it("returns a structured 404 for unknown API routes", async () => {
+    const res = await request(app).get("/api/does-not-exist");
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe("NOT_FOUND");
+    expect(res.body.requestId).toBeTruthy();
+  });
+
+  it("rate limits repeated login attempts", async () => {
+    const statuses = [];
+    for (let i = 0; i < 22; i += 1) {
+      const res = await request(app).post("/api/auth/login").send({ token: "x" });
+      statuses.push(res.status);
+    }
+    expect(statuses).toContain(429);
+  });
+});
+
+describe("gateway health", () => {
+  it("reports every upstream and the shared cache", async () => {
+    const res = await request(app).get("/health");
+    expect(res.status).toBe(200);
+    expect(res.body.service).toBe("gateway");
+    expect(res.body.redis.connected).toBe(true);
+    expect(res.body.upstreams.CHAT_SERVICE).toBe("up");
+    expect(res.body.upstreams.AGENT_SERVICE).toBe("up");
+  });
+});
