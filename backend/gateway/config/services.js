@@ -24,19 +24,39 @@ export function serviceUrl(name) {
 
 // Vite dev (5173) plus `vite preview` (4173), which is how a production build is
 // checked locally. Production must set FRONTEND_URL to the real origins.
-const DEV_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173";
+const DEV_ORIGINS = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:4173",
+  "http://127.0.0.1:4173",
+];
+
+/**
+ * dotenv only strips quotes that wrap the whole value, so
+ * FRONTEND_URL="http://localhost:5173",http://localhost:4173 leaves literal
+ * quotes on the first origin and silently breaks every browser call. Trim the
+ * stray quotes rather than trusting the .env to be formatted perfectly.
+ */
+const cleanOrigin = (value) =>
+  String(value || "")
+    .trim()
+    .replace(/^["']+|["']+$/g, "")
+    .trim();
 
 export function allowedOrigins() {
-  const configured = (process.env.FRONTEND_URL || (isProduction() ? "" : DEV_ORIGINS))
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter(Boolean);
+  const raw = process.env.FRONTEND_URL || (isProduction() ? "" : DEV_ORIGINS.join(","));
+  const configured = raw.split(",").map(cleanOrigin).filter(Boolean);
 
-  if (isProduction() && configured.length === 0) {
-    logger.warn("FRONTEND_URL is empty; cross-origin requests will be rejected");
+  if (isProduction()) {
+    if (configured.length === 0) {
+      logger.warn("FRONTEND_URL is empty; cross-origin requests will be rejected");
+    }
+    return configured;
   }
 
-  return configured;
+  // Outside production the local app must always be reachable, whatever a
+  // partial FRONTEND_URL says.
+  return [...new Set([...configured, ...DEV_ORIGINS])];
 }
 
 /**

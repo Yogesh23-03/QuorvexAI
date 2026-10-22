@@ -1,6 +1,17 @@
 import { signInWithPopup, signOut } from "firebase/auth";
-import api, { ApiRequestError } from "../lib/api";
+import api, { ApiRequestError, setAccessToken } from "../lib/api";
 import { getFirebaseAuth, getGoogleProvider, isFirebaseConfigured } from "../lib/firebase";
+
+/**
+ * Every sign-in response carries an access token next to the user profile. It
+ * has to be handed to the api client immediately: the token is what authorises
+ * the next request (the httpOnly cookies are a fallback, and they are not sent
+ * when the app and the API live on different sites).
+ */
+function acceptSession(data) {
+  setAccessToken(data?.accessToken);
+  return data;
+}
 
 /** Returns the signed-in user, or null when there is no valid session. */
 export async function fetchCurrentUser() {
@@ -23,24 +34,26 @@ async function googleIdToken() {
       code: "FIREBASE_NOT_CONFIGURED",
     });
   }
-  const credential = await signInWithPopup(getFirebaseAuth(), getGoogleProvider());
+  // The Firebase SDK is code-split, so these helpers resolve asynchronously.
+  const [auth, provider] = await Promise.all([getFirebaseAuth(), getGoogleProvider()]);
+  const credential = await signInWithPopup(auth, provider);
   return credential.user.getIdToken();
 }
 
 export async function loginWithGoogle() {
   const token = await googleIdToken();
   const { data } = await api.post("/api/auth/login", { token });
-  return data;
+  return acceptSession(data);
 }
 
 export async function registerWithPassword({ name, email, password }) {
   const { data } = await api.post("/api/auth/register", { name, email, password });
-  return data;
+  return acceptSession(data);
 }
 
 export async function loginWithPassword({ email, password }) {
   const { data } = await api.post("/api/auth/login", { email, password });
-  return data;
+  return acceptSession(data);
 }
 
 export async function forgotPassword(email) {
@@ -59,9 +72,18 @@ export async function logout() {
   } catch {
     /* the cookie may already be gone */
   } finally {
-    if (isFirebaseConfigured()) {
-      await signOut(getFirebaseAuth()).catch(() => undefined);
-    }
+    setAccessToken(null);
+  }
+
+  if (!isFirebaseConfigured()) return;
+
+  // Clear the Google session too, but never let a Firebase hiccup keep the user
+  // signed in to the app: the QuorvexAI session is already gone at this point.
+  try {
+    const auth = await getFirebaseAuth();
+    await signOut(auth);
+  } catch {
+    /* no Google session to clear */
   }
 }
 

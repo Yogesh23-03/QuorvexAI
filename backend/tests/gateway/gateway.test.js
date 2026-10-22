@@ -1,7 +1,8 @@
 import http from "http";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
 import redis from "../../shared/redis/redis.js";
+import { allowedOrigins } from "../../gateway/config/services.js";
 
 const received = [];
 
@@ -130,6 +131,44 @@ describe("gateway protection", () => {
       statuses.push(res.status);
     }
     expect(statuses).toContain(429);
+  });
+});
+
+describe("gateway CORS", () => {
+  const original = process.env.FRONTEND_URL;
+
+  afterEach(() => {
+    process.env.FRONTEND_URL = original;
+  });
+
+  const preflight = (origin) =>
+    request(app)
+      .options("/api/auth/login")
+      .set("Origin", origin)
+      .set("Access-Control-Request-Method", "POST");
+
+  it("strips quotes that dotenv leaves on a configured origin", () => {
+    process.env.FRONTEND_URL = '"https://app.example.com",https://admin.example.com';
+
+    expect(allowedOrigins()).toContain("https://app.example.com");
+    expect(allowedOrigins()).toContain("https://admin.example.com");
+  });
+
+  it("answers the browser preflight for the local app", async () => {
+    process.env.FRONTEND_URL = '"http://localhost:5173",http://localhost:4173';
+
+    const res = await preflight("http://localhost:5173");
+
+    expect(res.headers["access-control-allow-origin"]).toBe("http://localhost:5173");
+    expect(res.headers["access-control-allow-credentials"]).toBe("true");
+  });
+
+  it("refuses an origin that is not allow-listed", async () => {
+    process.env.FRONTEND_URL = "http://localhost:5173";
+
+    const res = await preflight("https://evil.example.com");
+
+    expect(res.headers["access-control-allow-origin"]).toBeUndefined();
   });
 });
 

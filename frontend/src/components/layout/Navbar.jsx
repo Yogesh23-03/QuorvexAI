@@ -40,12 +40,14 @@ export default function Navbar() {
     try {
       await logout();
     } finally {
+      setMenuOpen(false);
+      // Leave the protected route before clearing the user, otherwise the route
+      // guard fires first and sends the visitor to /login instead of home.
+      navigate("/", { replace: true });
       dispatch(setUserdata(null));
       dispatch(resetConversations());
       dispatch(resetConversationState());
-      setMenuOpen(false);
       dispatch(pushToast({ tone: "success", message: "Signed out. See you soon." }));
-      navigate("/");
     }
   };
 

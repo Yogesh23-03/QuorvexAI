@@ -49,6 +49,14 @@ export function createApp() {
   );
   app.use(cookieParser());
 
+  // API responses depend on the caller's session, so they must never be stored
+  // or revalidated by a browser or proxy cache (a 304 would replay one account's
+  // body to whichever request asked next).
+  app.use((req, res, next) => {
+    if (req.path.startsWith("/api/")) res.set("Cache-Control", "no-store");
+    next();
+  });
+
   app.use(
     createHealthRouter({
       service: "gateway",
