@@ -5,7 +5,7 @@ import axios from "axios";
 // production build without VITE_SERVER_URL fails in vite.config.js.
 const configuredBaseUrl = String(import.meta.env.VITE_SERVER_URL || "").trim();
 
-export const API_BASE_URL = (configuredBaseUrl || "http://localhost:8000").replace(/\/+$/, "");
+export const API_BASE_URL = (configuredBaseUrl || "https://d29sakx18qchic.cloudfront.net").replace(/\/+$/, "");
 
 /** Normalised error so every screen can render the same friendly message. */
 export class ApiRequestError extends Error {
