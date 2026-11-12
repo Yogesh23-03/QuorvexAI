@@ -252,6 +252,13 @@ are `services/agent/controllers/agent.controller.js` (enqueue/return 202) and
 | One distribution, `/api/*` → ALB (recommended) | `true`          | `lax`             | the CloudFront origin(s) |
 | SPA on a different site than the API           | `true`          | `none`            | the SPA origin(s)        |
 
+Leaving `COOKIE_SAMESITE` unset is recommended: the auth service decides per
+request (`lax` when the browser says same-origin, `none` when it says
+cross-site), so a frontend host and an API host on different platforms keep the
+session across reloads without anybody remembering this table. A Lax cookie on a
+cross-site call is stored but never sent back, which is what made every refresh
+look like a sign-out.
+
 With cookies blocked, the app still works for the lifetime of the tab: the
 access token is held in memory and sent as `Authorization: Bearer`. A reload
 finds no session and shows the sign-in page — there is no redirect loop, because

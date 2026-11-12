@@ -52,9 +52,11 @@ async function loadUser(userId) {
   return User.findById(userId);
 }
 
-async function respondWithTokens(res, user, status = 200) {
+async function respondWithTokens(req, res, user, status = 200) {
   const tokens = await issueTokens(user);
-  setAuthCookies(res, tokens);
+  // The request decides the cookie flags: a cross-site SPA needs SameSite=None
+  // or the browser will not send the session back on the next page load.
+  setAuthCookies(res, tokens, req);
   return res.status(status).json({ ...publicUser(user), ...tokens });
 }
 
@@ -66,7 +68,7 @@ function addProvider(user, provider) {
 
 /* ------------------------------------------------------------------ Google */
 
-async function loginWithFirebaseToken(res, token) {
+async function loginWithFirebaseToken(req, res, token) {
   let decoded;
   try {
     decoded = await firebaseAuth().verifyIdToken(token, true);
@@ -99,7 +101,7 @@ async function loginWithFirebaseToken(res, token) {
     await user.save();
   }
 
-  return respondWithTokens(res, user);
+  return respondWithTokens(req, res, user);
 }
 
 /* ------------------------------------------------------ Email + password */
@@ -134,7 +136,7 @@ export async function register(req, res, next) {
       logger.info({ userId: String(user._id) }, "user registered with email and password");
     }
 
-    return respondWithTokens(res, user, 201);
+    return respondWithTokens(req, res, user, 201);
   } catch (error) {
     return next(error);
   }
@@ -144,7 +146,7 @@ export async function login(req, res, next) {
   try {
     const { token } = req.body || {};
     if (typeof token === "string" && token.length >= 20) {
-      return await loginWithFirebaseToken(res, token);
+      return await loginWithFirebaseToken(req, res, token);
     }
 
     const { email, password } = parse(passwordLoginSchema, req.body);
@@ -157,7 +159,7 @@ export async function login(req, res, next) {
     addProvider(user, "password");
     await user.save();
 
-    return respondWithTokens(res, user);
+    return respondWithTokens(req, res, user);
   } catch (error) {
     return next(error);
   }
@@ -172,7 +174,7 @@ export async function refresh(req, res, next) {
     const user = await loadUser(userId);
     if (!user) return next(unauthorized("Account no longer exists"));
 
-    return respondWithTokens(res, user);
+    return respondWithTokens(req, res, user);
   } catch (error) {
     return next(error);
   }
@@ -183,7 +185,7 @@ export async function logOut(req, res, next) {
     const refreshToken = req.cookies?.[REFRESH_COOKIE] || req.body?.refreshToken;
     if (refreshToken) await revokeRefreshToken(refreshToken);
     await revokeAccessToken(extractAccessToken(req));
-    clearAuthCookies(res);
+    clearAuthCookies(res, req);
     // Clear the legacy Redis session cookie too, if one is still around.
     res.clearCookie("session", { path: "/" });
     return res.status(200).json({ success: true, message: "Logged out" });

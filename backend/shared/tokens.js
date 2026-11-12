@@ -28,33 +28,86 @@ function refreshSecret() {
 const refreshKey = (jti) => `auth:refresh:${jti}`;
 const blockKey = (jti) => `auth:block:${jti}`;
 
+/** Hostname of an absolute URL, or of a bare `host[:port]` header value. */
+function hostOf(value) {
+  const raw = String(value || "")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+  if (!raw) return "";
+  try {
+    const withScheme = /^[a-z][a-z0-9+.-]*:\/\//.test(raw) ? raw : `http://${raw}`;
+    return new URL(withScheme).hostname;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * True when the browser is calling the API from another site.
+ *
+ * This is the difference between a session that survives a reload and one that
+ * does not. With the SPA and the API on different hosts the cookies were stored
+ * with `SameSite=Lax`: the browser kept them but refuses to send them on a
+ * cross-site request, so every page load answered 401 from /api/me and the
+ * visitor was bounced back to the sign-in form.
+ *
+ * `Sec-Fetch-Site` is computed by the browser itself (with the public suffix
+ * list), so it is preferred: one origin serving both the SPA and /api reports
+ * `same-origin` and keeps the stricter Lax cookie, while a cross-site SPA
+ * reports `cross-site` and gets None. Older clients fall back to comparing the
+ * Origin header with the host that served the request.
+ */
+function isCrossSiteRequest(req) {
+  const headers = req?.headers;
+  if (!headers) return false;
+
+  const fetchSite = String(headers["sec-fetch-site"] || "")
+    .trim()
+    .toLowerCase();
+  if (fetchSite) return fetchSite === "cross-site";
+
+  const originHost = hostOf(headers.origin);
+  if (!originHost) return false; // same-origin navigation, or a server-to-server call
+  const requestHost = hostOf(headers["x-forwarded-host"] || headers.host);
+  return Boolean(requestHost) && requestHost !== originHost;
+}
+
 /**
  * Cookie flags are deployment facts, so they come from the environment with
  * production-safe defaults.
  *
  * Same-origin (one CloudFront distribution serving the SPA and /api/*) is the
- * supported shape: Secure + SameSite=Lax works there, and an Origin-checked
- * same-site request is exactly what Lax permits. If the UI is ever served from
- * a different site than the API, set COOKIE_SAMESITE=none (which forces
- * Secure) — and expect browsers to block it unless both are HTTPS.
+ * simplest shape: Secure + SameSite=Lax works there, and an Origin-checked
+ * same-site request is exactly what Lax permits. When the UI is served from a
+ * different site than the API, the same cookie must be SameSite=None or the
+ * browser silently drops it from every request — so that decision is made per
+ * request instead of being a deployment step people forget.
+ *
+ * COOKIE_SAMESITE still overrides: `strict` and `none` are taken literally, and
+ * `lax` means "Lax, except where Lax would break the session".
  */
-function cookieSecurity() {
+function cookieSecurity(req) {
   const configuredSecure = String(process.env.COOKIE_SECURE ?? "")
     .trim()
     .toLowerCase();
   const secure =
     configuredSecure === "" ? process.env.NODE_ENV === "production" : configuredSecure === "true";
 
-  const requested = String(process.env.COOKIE_SAMESITE || "lax")
+  const requested = String(process.env.COOKIE_SAMESITE || "")
     .trim()
     .toLowerCase();
-  // `none` without `secure` is silently dropped by every browser.
-  const sameSite =
-    requested === "none" && !secure
-      ? "lax"
-      : ["lax", "strict", "none"].includes(requested)
-        ? requested
+  const configured = ["lax", "strict", "none"].includes(requested) ? requested : "";
+
+  let sameSite =
+    configured === "strict" || configured === "none"
+      ? configured
+      : isCrossSiteRequest(req)
+        ? "none"
         : "lax";
+
+  // `none` without `secure` is silently dropped by every browser (plain http dev).
+  if (sameSite === "none" && !secure) sameSite = "lax";
 
   const domain = String(process.env.COOKIE_DOMAIN || "")
     .trim()
@@ -64,23 +117,23 @@ function cookieSecurity() {
 }
 
 /** Effective cookie flags, for health reporting (never includes values). */
-export function cookieConfig() {
-  return cookieSecurity();
+export function cookieConfig(req) {
+  return cookieSecurity(req);
 }
 
-function accessCookieOptions() {
+function accessCookieOptions(req) {
   return {
     httpOnly: true,
-    ...cookieSecurity(),
+    ...cookieSecurity(req),
     path: "/",
     maxAge: ACCESS_TTL_SECONDS * 1000,
   };
 }
 
-function refreshCookieOptions() {
+function refreshCookieOptions(req) {
   return {
     httpOnly: true,
-    ...cookieSecurity(),
+    ...cookieSecurity(req),
     path: "/api/auth",
     maxAge: REFRESH_TTL_SECONDS * 1000,
   };
@@ -130,16 +183,16 @@ export async function issueTokens(user) {
   };
 }
 
-export function setAuthCookies(res, tokens) {
-  res.cookie(ACCESS_COOKIE, tokens.accessToken, accessCookieOptions());
-  res.cookie(REFRESH_COOKIE, tokens.refreshToken, refreshCookieOptions());
+export function setAuthCookies(res, tokens, req) {
+  res.cookie(ACCESS_COOKIE, tokens.accessToken, accessCookieOptions(req));
+  res.cookie(REFRESH_COOKIE, tokens.refreshToken, refreshCookieOptions(req));
 }
 
-export function clearAuthCookies(res) {
+export function clearAuthCookies(res, req) {
   // clearCookie must repeat path/domain/sameSite/secure or the browser keeps
   // the original cookie and the user stays "signed in" after logging out.
-  res.clearCookie(ACCESS_COOKIE, { ...accessCookieOptions(), maxAge: undefined });
-  res.clearCookie(REFRESH_COOKIE, { ...refreshCookieOptions(), maxAge: undefined });
+  res.clearCookie(ACCESS_COOKIE, { ...accessCookieOptions(req), maxAge: undefined });
+  res.clearCookie(REFRESH_COOKIE, { ...refreshCookieOptions(req), maxAge: undefined });
 }
 
 export async function verifyAccessToken(token) {
