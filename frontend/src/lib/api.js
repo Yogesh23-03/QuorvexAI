@@ -1,11 +1,25 @@
 import axios from "axios";
 
-// The base URL always comes from the environment; the localhost default is a
-// development convenience so `npm run dev` works before .env exists. A
-// production build without VITE_SERVER_URL fails in vite.config.js.
-const configuredBaseUrl = String(import.meta.env.VITE_SERVER_URL || "").trim();
+/**
+ * API base URL.
+ *
+ * Empty (the recommended production value) means "same origin": the SPA calls
+ * `/api/...` on whatever host served it, which is one CloudFront distribution
+ * sending /api/* to the ALB and everything else to S3. Same-origin keeps the
+ * httpOnly cookies first-party, so no CORS preflight and no SameSite=None.
+ *
+ * A non-empty value must be an absolute URL (`https://api.example.com`) and is
+ * used as-is; that shape only makes sense when the UI and API are on different
+ * hosts.
+ */
+const configuredBaseUrl = String(import.meta.env.VITE_SERVER_URL || "")
+  .trim()
+  .replace(/\/+$/, "");
 
-export const API_BASE_URL = (configuredBaseUrl || "https://d29sakx18qchic.cloudfront.net").replace(/\/+$/, "");
+export const API_BASE_URL = configuredBaseUrl;
+
+/** Absolute URL for a path, working for both same-origin and absolute bases. */
+export const apiUrl = (path) => `${API_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
 
 /** Normalised error so every screen can render the same friendly message. */
 export class ApiRequestError extends Error {
@@ -108,7 +122,7 @@ api.interceptors.request.use((config) => {
 function refreshAccessToken() {
   if (!refreshRequest) {
     refreshRequest = axios
-      .post(`${API_BASE_URL}/api/auth/refresh`, null, { withCredentials: true })
+      .post(apiUrl("/api/auth/refresh"), null, { withCredentials: true })
       .then(({ data }) => {
         setAccessToken(data?.accessToken);
         return data;

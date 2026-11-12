@@ -2,10 +2,10 @@ import dotenv from "dotenv";
 import mongoose from "mongoose";
 import { createApp } from "./app.js";
 import { connectDbWithRetry, disconnectDb } from "./config/db.js";
-import { logger } from "../../shared/logger.js";
 import { reportIndexDrift } from "../../shared/indexes.js";
 import redis from "../../shared/redis/redis.js";
 import { validateEnv, validators } from "../../shared/env.js";
+import { startServer } from "../../shared/server.js";
 
 dotenv.config({ quiet: true });
 process.env.SERVICE_NAME = process.env.SERVICE_NAME || "chat-service";
@@ -13,6 +13,9 @@ process.env.SERVICE_NAME = process.env.SERVICE_NAME || "chat-service";
 validateEnv({
   service: "chat-service",
   required: [{ name: "MONGODB_URI", validator: validators.mongoUri }],
+  // The gateway injects it on every call; without it the router accepts direct
+  // (unauthenticated) traffic from anything that can reach the port.
+  production: ["INTERNAL_API_KEY"],
   recommended: [
     { name: "PORT", validator: validators.port },
     { name: "REDIS_URL", validator: validators.redisUri },
@@ -29,25 +32,9 @@ mongoose.connection.once("connected", () => {
   reportIndexDrift().catch(() => undefined);
 });
 
-const server = app.listen(port, () => {
-  logger.info({ port }, "chat service started");
-});
-
-async function shutdown(signal) {
-  logger.info({ signal }, "shutting down chat service");
-  stopDbRetry();
-  server.close(async () => {
-    await Promise.allSettled([disconnectDb(), redis.disconnect()]);
-    process.exit(0);
-  });
-  setTimeout(() => process.exit(1), 10000).unref();
-}
-
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
-process.on("unhandledRejection", (reason) => {
-  logger.error({ err: reason instanceof Error ? reason.message : reason }, "unhandled rejection");
-});
-process.on("uncaughtException", (error) => {
-  logger.error({ err: error.message }, "uncaught exception");
+startServer({
+  service: "chat-service",
+  port,
+  app,
+  onShutdown: [() => stopDbRetry(), () => disconnectDb(), () => redis.disconnect()],
 });

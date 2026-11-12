@@ -2,6 +2,7 @@ import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import redis from "./redis/redis.js";
 import { unauthorized } from "./errors.js";
+import { logger } from "./logger.js";
 
 const ACCESS_COOKIE = "access";
 export const REFRESH_COOKIE = "refresh";
@@ -27,25 +28,61 @@ function refreshSecret() {
 const refreshKey = (jti) => `auth:refresh:${jti}`;
 const blockKey = (jti) => `auth:block:${jti}`;
 
+/**
+ * Cookie flags are deployment facts, so they come from the environment with
+ * production-safe defaults.
+ *
+ * Same-origin (one CloudFront distribution serving the SPA and /api/*) is the
+ * supported shape: Secure + SameSite=Lax works there, and an Origin-checked
+ * same-site request is exactly what Lax permits. If the UI is ever served from
+ * a different site than the API, set COOKIE_SAMESITE=none (which forces
+ * Secure) — and expect browsers to block it unless both are HTTPS.
+ */
+function cookieSecurity() {
+  const configuredSecure = String(process.env.COOKIE_SECURE ?? "")
+    .trim()
+    .toLowerCase();
+  const secure =
+    configuredSecure === "" ? process.env.NODE_ENV === "production" : configuredSecure === "true";
+
+  const requested = String(process.env.COOKIE_SAMESITE || "lax")
+    .trim()
+    .toLowerCase();
+  // `none` without `secure` is silently dropped by every browser.
+  const sameSite =
+    requested === "none" && !secure
+      ? "lax"
+      : ["lax", "strict", "none"].includes(requested)
+        ? requested
+        : "lax";
+
+  const domain = String(process.env.COOKIE_DOMAIN || "")
+    .trim()
+    .replace(/^\./, "");
+
+  return { secure, sameSite, ...(domain ? { domain } : {}) };
+}
+
+/** Effective cookie flags, for health reporting (never includes values). */
+export function cookieConfig() {
+  return cookieSecurity();
+}
+
 function accessCookieOptions() {
   return {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
+    ...cookieSecurity(),
     path: "/",
     maxAge: ACCESS_TTL_SECONDS * 1000,
-    ...(process.env.COOKIE_DOMAIN ? { domain: process.env.COOKIE_DOMAIN } : {}),
   };
 }
 
 function refreshCookieOptions() {
   return {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
+    ...cookieSecurity(),
     path: "/api/auth",
     maxAge: REFRESH_TTL_SECONDS * 1000,
-    ...(process.env.COOKIE_DOMAIN ? { domain: process.env.COOKIE_DOMAIN } : {}),
   };
 }
 
@@ -99,6 +136,8 @@ export function setAuthCookies(res, tokens) {
 }
 
 export function clearAuthCookies(res) {
+  // clearCookie must repeat path/domain/sameSite/secure or the browser keeps
+  // the original cookie and the user stays "signed in" after logging out.
   res.clearCookie(ACCESS_COOKIE, { ...accessCookieOptions(), maxAge: undefined });
   res.clearCookie(REFRESH_COOKIE, { ...refreshCookieOptions(), maxAge: undefined });
 }
@@ -113,9 +152,25 @@ export async function verifyAccessToken(token) {
     throw unauthorized("Your session expired. Please sign in again");
   }
   if (payload.typ !== "access") throw unauthorized("Invalid access token");
-  if (payload.jti && (await redis.get(blockKey(payload.jti)))) {
-    throw unauthorized("This session was signed out");
+
+  if (payload.jti) {
+    try {
+      if (await redis.get(blockKey(payload.jti))) {
+        throw unauthorized("This session was signed out");
+      }
+    } catch (error) {
+      // The blocklist is a revocation aid, not a source of truth: access tokens
+      // live 15 minutes. If the cache is down, accept the signed token (and say
+      // so) rather than 503-ing every authenticated request. Refresh-token
+      // writes stay strict — those genuinely need the shared store.
+      if (error?.code === "REDIS_UNAVAILABLE") {
+        logger.warn("token blocklist unavailable; accepting a validly signed access token");
+      } else {
+        throw error;
+      }
+    }
   }
+
   return payload;
 }
 

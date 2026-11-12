@@ -36,6 +36,17 @@ describe.each(serviceDefinitions)("$name", (service) => {
     expect(res.body.timestamp).toBeTruthy();
   });
 
+  it("answers /live without touching a dependency", async () => {
+    const res = await request(apps.get(service.name)).get("/live");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ status: "ok", service: service.name });
+    // No db/redis probing: this is the ALB/ECS path and must stay cheap and
+    // independent of Atlas, ElastiCache and every upstream.
+    expect(res.body.db).toBeUndefined();
+    expect(res.body.redis).toBeUndefined();
+  });
+
   it("answers its root with an online envelope", async () => {
     const res = await request(apps.get(service.name)).get("/");
     expect(res.status).toBe(200);

@@ -2,7 +2,8 @@ import express from "express";
 import router from "./routes/agent.route.js";
 import { createHealthRouter } from "../../shared/health.js";
 import { errorHandler, notFoundHandler } from "../../shared/errors.js";
-import { requestId, requestLogger } from "../../shared/request.js";
+import { requestId, requestLogger, requestTimeout } from "../../shared/request.js";
+import { envMs } from "../../shared/timeout.js";
 
 export function createApp() {
   const app = express();
@@ -13,6 +14,10 @@ export function createApp() {
 
   // Multipart uploads are streamed to multer; JSON bodies stay small here.
   app.use(express.json({ limit: "1mb" }));
+  // A run is bounded by AGENT_TIMEOUT_MS plus room for the credit/chat calls.
+  app.use(
+    requestTimeout(envMs("AGENT_REQUEST_TIMEOUT_MS", envMs("AGENT_TIMEOUT_MS", 180000) + 30000)),
+  );
 
   app.use(
     createHealthRouter({

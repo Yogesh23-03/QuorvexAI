@@ -12,6 +12,9 @@ export class ApiError extends Error {
     this.status = status;
     this.code = code;
     this.details = details;
+    // 4xx messages are written for the caller. A 5xx message is only exposed
+    // when the raiser opts in, because stack traces and driver text must never
+    // reach a browser.
     this.expose = status < 500;
   }
 }
@@ -44,13 +47,24 @@ export function errorHandler(error, req, res, _next) {
     );
   }
 
-  if (res.headersSent) return;
+  // A streamed response (agent heartbeat) has already sent its head; the only
+  // honest thing left is to end it rather than pretend a status can change.
+  if (res.headersSent) {
+    if (!res.writableEnded) res.end();
+    return;
+  }
 
   res.status(status).json({
     success: false,
     error: {
       code,
-      message: isServerError ? "Something went wrong. Please try again." : error.message,
+      // 503/504 raised deliberately (cache down, request budget spent) carry a
+      // message that is safe and useful, so the client can tell "retry" apart
+      // from "something broke".
+      message:
+        isServerError && error.expose !== true
+          ? "Something went wrong. Please try again."
+          : error.message,
       ...(error.details ? { details: error.details } : {}),
     },
     requestId: req.id,

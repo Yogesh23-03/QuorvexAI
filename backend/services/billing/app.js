@@ -2,7 +2,7 @@ import express from "express";
 import router from "./routes/billing.route.js";
 import { createHealthRouter } from "../../shared/health.js";
 import { errorHandler, notFoundHandler } from "../../shared/errors.js";
-import { requestId, requestLogger } from "../../shared/request.js";
+import { requestId, requestLogger, requestTimeout } from "../../shared/request.js";
 
 export function createApp() {
   const app = express();
@@ -11,14 +11,13 @@ export function createApp() {
   app.use(requestId);
   app.use(requestLogger);
   app.use(express.json({ limit: "1mb" }));
+  app.use(requestTimeout());
 
   app.use(
     createHealthRouter({
       service: "billing-service",
       requiresDb: true,
-      extraChecks: async () => ({
-        razorpay: process.env.RAZORPAY_KEY_ID ? "configured" : "missing",
-      }),
+      extraChecks: async () => ({ razorpay: Boolean(process.env.RAZORPAY_KEY_ID) }),
     }),
   );
 

@@ -8,26 +8,37 @@ import { logger } from "./logger.js";
 
 const URL_PATTERN = /^https?:\/\/[^\s]+$/;
 
+// A .env written on Windows keeps its CRLF line endings, so every value can
+// arrive with a trailing \r. Validate the trimmed value or a perfectly good
+// PORT=8000 is reported as invalid on every boot.
+const clean = (value) => String(value ?? "").trim();
+
 export const validators = {
-  url: { test: (value) => URL_PATTERN.test(value), hint: "must be an absolute http(s) URL" },
+  url: { test: (value) => URL_PATTERN.test(clean(value)), hint: "must be an absolute http(s) URL" },
   port: {
-    test: (value) => /^\d+$/.test(String(value)) && Number(value) > 0 && Number(value) < 65536,
+    test: (value) => {
+      const text = clean(value);
+      return /^\d+$/.test(text) && Number(text) > 0 && Number(text) < 65536;
+    },
     hint: "must be a TCP port between 1 and 65535",
   },
   positiveInt: {
-    test: (value) => /^\d+$/.test(String(value)) && Number(value) > 0,
+    test: (value) => {
+      const text = clean(value);
+      return /^\d+$/.test(text) && Number(text) > 0;
+    },
     hint: "must be a positive integer",
   },
   mongoUri: {
-    test: (value) => /^mongodb(\+srv)?:\/\//.test(value),
+    test: (value) => /^mongodb(\+srv)?:\/\//.test(clean(value)),
     hint: "must start with mongodb:// or mongodb+srv://",
   },
   redisUri: {
-    test: (value) => /^rediss?:\/\//.test(value),
+    test: (value) => /^rediss?:\/\//.test(clean(value)),
     hint: "must start with redis:// or rediss://",
   },
   booleanish: {
-    test: (value) => ["true", "false", "1", "0"].includes(String(value).toLowerCase()),
+    test: (value) => ["true", "false", "1", "0"].includes(clean(value).toLowerCase()),
     hint: "must be true or false",
   },
 };

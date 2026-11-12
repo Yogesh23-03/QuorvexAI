@@ -170,15 +170,61 @@ describe("gateway CORS", () => {
 
     expect(res.headers["access-control-allow-origin"]).toBeUndefined();
   });
+
+  it("normalises a trailing slash copied from the address bar", () => {
+    process.env.FRONTEND_URL = "https://app.example.com/";
+    expect(allowedOrigins()).toContain("https://app.example.com");
+  });
+
+  it("drops malformed entries instead of rejecting the whole list", () => {
+    process.env.FRONTEND_URL = "https://app.example.com, not a url ,https://admin.example.com/";
+
+    const origins = allowedOrigins();
+    expect(origins).toContain("https://app.example.com");
+    expect(origins).toContain("https://admin.example.com");
+    expect(origins).not.toContain("not a url");
+  });
+
+  it("never adds localhost origins in production", () => {
+    const previous = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    process.env.FRONTEND_URL = "https://app.example.com";
+
+    try {
+      expect(allowedOrigins()).toEqual(["https://app.example.com"]);
+    } finally {
+      process.env.NODE_ENV = previous;
+    }
+  });
 });
 
 describe("gateway health", () => {
-  it("reports every upstream and the shared cache", async () => {
+  it("reports the shared cache without probing upstreams", async () => {
     const res = await request(app).get("/health");
     expect(res.status).toBe(200);
     expect(res.body.service).toBe("gateway");
     expect(res.body.redis.connected).toBe(true);
+    // Upstream reachability is I/O: it only runs when asked (?deep=1), and it
+    // is answered from /live so a slow dependency cannot look "down".
+    expect(res.body.upstreams).toBeUndefined();
+  });
+
+  it("reports every upstream on ?deep=1", async () => {
+    const res = await request(app).get("/health?deep=1");
+    expect(res.status).toBe(200);
     expect(res.body.upstreams.CHAT_SERVICE).toBe("up");
     expect(res.body.upstreams.AGENT_SERVICE).toBe("up");
+  });
+
+  it("stays 200 while an upstream is unreachable", async () => {
+    const res = await request(app).get("/health?deep=1");
+    expect(res.status).toBe(200);
+    expect(res.body.upstreams.BILLING_SERVICE).toMatch(/up|down|http-\d+/);
+  });
+
+  it("answers /live without touching any dependency", async () => {
+    const res = await request(app).get("/live");
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ status: "ok", service: "gateway" });
   });
 });

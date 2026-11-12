@@ -41,11 +41,24 @@ const cleanOrigin = (value) =>
   String(value || "")
     .trim()
     .replace(/^["']+|["']+$/g, "")
+    // A browser sends `https://app.example.com`, never `.../`. A trailing slash
+    // copied from the address bar would otherwise reject every request.
+    .replace(/\/+$/, "")
     .trim();
+
+const isOrigin = (value) => /^https?:\/\/[^/\s]+$/.test(value);
 
 export function allowedOrigins() {
   const raw = process.env.FRONTEND_URL || (isProduction() ? "" : DEV_ORIGINS.join(","));
-  const configured = raw.split(",").map(cleanOrigin).filter(Boolean);
+  const configured = raw
+    .split(",")
+    .map(cleanOrigin)
+    .filter(Boolean)
+    .filter((origin) => {
+      if (isOrigin(origin)) return true;
+      logger.warn({ origin }, "ignoring malformed FRONTEND_URL entry");
+      return false;
+    });
 
   if (isProduction()) {
     if (configured.length === 0) {
@@ -85,7 +98,9 @@ export function logConfig() {
       agent: process.env.AGENT_SERVICE ? "env" : "default",
       billing: process.env.BILLING_SERVICE ? "env" : "default",
       jwt: process.env.JWT_SECRET ? "env" : "development-fallback",
+      internalKey: process.env.INTERNAL_API_KEY ? "env" : "unset",
       origins: allowedOrigins(),
+      proxyTimeoutMs: Number(process.env.PROXY_TIMEOUT_MS) || 60000,
     },
     "gateway routing configuration",
   );

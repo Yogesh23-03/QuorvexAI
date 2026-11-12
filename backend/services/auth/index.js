@@ -2,10 +2,10 @@ import dotenv from "dotenv";
 import mongoose from "mongoose";
 import { createApp } from "./app.js";
 import { connectDbWithRetry, disconnectDb } from "./config/db.js";
-import { logger } from "../../shared/logger.js";
 import { reportIndexDrift } from "../../shared/indexes.js";
 import redis from "../../shared/redis/redis.js";
 import { validateEnv, validators } from "../../shared/env.js";
+import { startServer } from "../../shared/server.js";
 
 dotenv.config({ quiet: true });
 process.env.SERVICE_NAME = process.env.SERVICE_NAME || "auth-service";
@@ -18,14 +18,16 @@ validateEnv({
     // Development falls back to throw-away secrets; production never does.
     "JWT_SECRET",
     "JWT_REFRESH_SECRET",
+    "INTERNAL_API_KEY",
   ],
   recommended: [
     { name: "PORT", validator: validators.port },
     { name: "REDIS_URL", validator: validators.redisUri },
-    "INTERNAL_API_KEY",
-    "FIREBASE_SERVICE_ACCOUNT",
+    // Google sign-in is optional: email/password keeps working without it.
     "FIREBASE_SERVICE_ACCOUNT_BASE64",
+    // Password-reset mail is optional: with no SMTP the link is logged instead.
     "SMTP_HOST",
+    { name: "COOKIE_SAMESITE", validator: validators.booleanish },
   ],
 });
 
@@ -39,25 +41,9 @@ mongoose.connection.once("connected", () => {
   reportIndexDrift().catch(() => undefined);
 });
 
-const server = app.listen(port, () => {
-  logger.info({ port }, "auth service started");
-});
-
-async function shutdown(signal) {
-  logger.info({ signal }, "shutting down auth service");
-  stopDbRetry();
-  server.close(async () => {
-    await Promise.allSettled([disconnectDb(), redis.disconnect()]);
-    process.exit(0);
-  });
-  setTimeout(() => process.exit(1), 10000).unref();
-}
-
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
-process.on("unhandledRejection", (reason) => {
-  logger.error({ err: reason instanceof Error ? reason.message : reason }, "unhandled rejection");
-});
-process.on("uncaughtException", (error) => {
-  logger.error({ err: error.message }, "uncaught exception");
+startServer({
+  service: "auth-service",
+  port,
+  app,
+  onShutdown: [() => stopDbRetry(), () => disconnectDb(), () => redis.disconnect()],
 });

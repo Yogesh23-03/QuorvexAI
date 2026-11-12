@@ -1,18 +1,41 @@
 import proxy from "express-http-proxy";
 import { ApiError } from "../../shared/errors.js";
-
-const DEFAULT_TIMEOUT_MS = 180000;
+import { envMs } from "../../shared/timeout.js";
 
 /**
- * Proxy that forwards identity + tracing headers to a downstream service.
- * Long timeouts are required because agent calls block on LLM providers.
+ * Default budget for one proxied request. It is deliberately below the ALB's
+ * 60s idle timeout so the caller gets a JSON 504 from us instead of an empty
+ * connection reset from the load balancer.
+ */
+export const DEFAULT_PROXY_TIMEOUT_MS = 60000;
+
+/**
+ * Proxies one API prefix to one service.
+ *
+ * Two options are load-bearing:
+ *
+ * `parseReqBody: false` — the gateway must never parse a body. Any middleware
+ * that consumes the request stream (express.json, body-parser) leaves the
+ * upstream waiting for bytes that will never arrive: the request hangs until a
+ * timeout and the downstream service logs nothing, because its handler never
+ * runs. With this false, express-http-proxy pipes the original stream and the
+ * original content-length header to the upstream untouched, so JSON and
+ * multipart bodies both arrive intact.
+ *
+ * `stream: true` — responses are piped instead of buffered. Agent runs send
+ * newline heartbeats while the graph works (see services/agent), and buffering
+ * would hold those bytes until the run finished, which is exactly what trips
+ * CloudFront's 30s origin-response timeout.
  */
 export function proxyWithHeader(serviceUrl, options = {}) {
+  const timeout = Number(options.timeout) || envMs("PROXY_TIMEOUT_MS", DEFAULT_PROXY_TIMEOUT_MS);
+
   return proxy(serviceUrl, {
-    // Stream the raw body so multipart uploads (PDF/PPT/image) survive intact.
     parseReqBody: false,
-    timeout: Number(process.env.PROXY_TIMEOUT_MS || DEFAULT_TIMEOUT_MS),
+    stream: true,
+    timeout,
     proxyReqOptDecorator: (proxyReqOpts, srcReq) => {
+      proxyReqOpts.headers = proxyReqOpts.headers || {};
       proxyReqOpts.headers["x-request-id"] = srcReq.id;
       if (srcReq.user) proxyReqOpts.headers["x-user-id"] = String(srcReq.user.userId);
       if (process.env.INTERNAL_API_KEY) {
@@ -21,15 +44,26 @@ export function proxyWithHeader(serviceUrl, options = {}) {
       return proxyReqOpts;
     },
     proxyErrorHandler: (error, res, next) => {
-      if (res.headersSent) return;
-      if (
-        error.code === "ECONNRESET" ||
-        error.code === "ETIMEDOUT" ||
-        error.code === "ECONNREFUSED"
-      ) {
-        return next(new ApiError(503, "Service temporarily unavailable", "SERVICE_UNAVAILABLE"));
+      // A streamed response has already sent its head: ending it is the only
+      // honest signal left, and it stops the client waiting forever.
+      if (res.headersSent) {
+        if (!res.writableEnded) res.destroy();
+        return;
       }
-      return next(new ApiError(502, "Upstream service error", "BAD_GATEWAY"));
+
+      const code = error?.code;
+      const timedOut =
+        code === "ETIMEDOUT" || code === "ECONNRESET" || code === "ECONNABORTED" || !code;
+
+      const apiError = timedOut
+        ? new ApiError(
+            504,
+            "The service did not answer in time. Please try again.",
+            "GATEWAY_TIMEOUT",
+          )
+        : new ApiError(503, "This service is temporarily unavailable.", "SERVICE_UNAVAILABLE");
+      apiError.expose = true;
+      return next(apiError);
     },
     ...options,
   });

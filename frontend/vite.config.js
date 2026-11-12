@@ -6,14 +6,10 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "VITE_");
   const isProductionBuild = mode === "production";
 
-  // A bundle without an API base URL would silently point at a developer
-  // machine, so production builds refuse to run without one.
-  if (isProductionBuild && !env.VITE_SERVER_URL) {
-    throw new Error(
-      "VITE_SERVER_URL is not set. Copy frontend/.env.example to .env and point it at the API gateway before building.",
-    );
-  }
-
+  // An empty VITE_SERVER_URL is the recommended production setting: the app
+  // then calls /api/* on its own origin, which is what the CloudFront
+  // distribution (S3 + /api/* to the ALB) is built for. Only a localhost URL in
+  // a production bundle is suspicious enough to warn about.
   if (isProductionBuild && /localhost|127\.0\.0\.1/.test(env.VITE_SERVER_URL || "")) {
     console.warn(
       `[vite] VITE_SERVER_URL is ${env.VITE_SERVER_URL} — a localhost API URL in a production build.`,

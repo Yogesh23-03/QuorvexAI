@@ -10,7 +10,13 @@ export async function withTimeout(
     return await Promise.race([
       promise,
       new Promise((_resolve, reject) => {
-        timer = setTimeout(() => reject(new ApiError(504, message, "AGENT_TIMEOUT")), ms);
+        timer = setTimeout(() => {
+          const error = new ApiError(504, message, "AGENT_TIMEOUT");
+          // This message is written for the user; do not let the generic 5xx
+          // handler replace it with "something went wrong".
+          error.expose = true;
+          reject(error);
+        }, ms);
       }),
     ]);
   } finally {

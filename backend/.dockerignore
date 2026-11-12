@@ -1,0 +1,25 @@
+# Build context for every service image is backend/:
+#   docker build -f services/auth/Dockerfile .
+# Dependencies are installed inside the image with `npm ci`, never copied from
+# the host (host modules are the wrong platform/libc).
+**/node_modules
+**/logs
+**/coverage
+**/.env
+**/.env.*
+**/*.log
+**/*.pem
+**/*.key
+**/serviceAccountKey.json
+**/*-service-account*.json
+tests
+**/*.test.js
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+Dockerfile
+**/.dockerignore
+docs
+.git
+.gitignore

@@ -10,8 +10,10 @@ import { withTimeout } from "../utils/withTimeout.js";
 import { badRequest, unauthorized } from "../../../shared/errors.js";
 import { normalizeAgent } from "../../../shared/constants.js";
 import { logger } from "../../../shared/logger.js";
+import { beginKeepAlive, sendJson } from "../../../shared/stream.js";
 
 const AGENT_TIMEOUT_MS = Number(process.env.AGENT_TIMEOUT_MS || 180000);
+const FAILURE_MESSAGE = "The agents could not answer that. Please try again.";
 
 async function cleanupFile(file) {
   if (!file?.path) return;
@@ -23,11 +25,18 @@ async function cleanupFile(file) {
   }
 }
 
+/** Client-safe text: 4xx messages are already written for the caller. */
+function safeMessage(error) {
+  if (error?.expose === true || (Number(error?.status) || 500) < 500) return error.message;
+  return FAILURE_MESSAGE;
+}
+
 export async function agent(req, res, next) {
   const file = req.file;
   const userId = req.headers["x-user-id"];
   // Only set once credits are actually reserved, so a failed charge is never refunded.
   let chargedAgent = null;
+  let keepAlive = { started: false, stop() {} };
 
   try {
     if (!userId) throw unauthorized();
@@ -43,6 +52,11 @@ export async function agent(req, res, next) {
     await deductCredits(userId, agentName);
     chargedAgent = agentName;
     await checkAgentLimit(userId, chargedAgent);
+
+    // Everything above fails fast with a real status (401/402/429). From here on
+    // the run can outlive CloudFront's 30s and the ALB's 60s, so the response
+    // head goes out now and newline heartbeats keep it alive.
+    keepAlive = beginKeepAlive(res);
 
     const result = await withTimeout(
       graph.invoke({ prompt, conversationId, agent: agentName, userId, file }),
@@ -66,7 +80,7 @@ export async function agent(req, res, next) {
     const user = await fetchUser(userId);
     await cleanupFile(file);
 
-    return res.status(200).json({
+    return sendJson(res, 200, {
       answer,
       images: result?.images || [],
       artifacts: result?.artifacts || [],
@@ -77,8 +91,22 @@ export async function agent(req, res, next) {
   } catch (error) {
     if (chargedAgent && userId) await refundCredits(userId, chargedAgent);
     await cleanupFile(file);
-    // The shared error handler returns 5xx errors as a generic message, so raw
-    // provider failures can pass through without leaking internals.
+
+    // The head is already on the wire, so the failure travels in the body. The
+    // frontend maps `success:false` back to the same error it would have shown
+    // for a 4xx/5xx response.
+    if (res.headersSent) {
+      logger.error({ err: error.message, code: error.code }, "agent run failed after headers sent");
+      sendJson(res, 200, {
+        success: false,
+        error: { code: error.code || "AGENT_FAILED", message: safeMessage(error) },
+        requestId: req.id,
+      });
+      return undefined;
+    }
+
     return next(error);
+  } finally {
+    keepAlive.stop();
   }
 }

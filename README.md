@@ -225,10 +225,20 @@ local development use `mongodb://127.0.0.1:27017/quorvex_<service>`.
 
 ### Health checks
 
-Every service exposes `GET /health` → status, service, version, uptime, Mongo
-state, Redis mode, plus service-specific checks (upstreams for the gateway,
-provider keys for the agent). Returns **503** when a required dependency is
-down. The gateway also aggregates all upstream health under `/health`.
+Two endpoints per service, because ECS and a human need different answers:
+
+- **`GET /live`** → `200` whenever the process is up. No I/O, no dependencies.
+  This is the ALB/ECS health check path, so a Mongo or Redis blip can never
+  restart healthy tasks.
+- **`GET /health`** → status, service, version, uptime, Mongo state, Redis mode,
+  plus cheap checks (provider keys on the agent, cookie flags on auth). Always
+  `200`, with `status: "degraded"` when something is down. It never returns
+  503: a load balancer polling this would otherwise remove every task during a
+  shared-dependency outage.
+
+`GET /health?deep=1` adds bounded probes: Redis ping, and — on the gateway —
+reachability of all four upstreams, answered from each service's `/live` with a
+1.5 s timeout. Diagnostics, not traffic decisions.
 
 ---
 
@@ -254,10 +264,12 @@ are not usable directly from the internet.
 
 **gateway** — `PORT`, `NODE_ENV`, `LOG_LEVEL`, `FRONTEND_URL` (CORS allow-list),
 `AUTH_SERVICE`, `CHAT_SERVICE`, `AGENT_SERVICE`, `BILLING_SERVICE`, `REDIS_URL`,
-`INTERNAL_API_KEY`, `PROXY_TIMEOUT_MS`.
+`INTERNAL_API_KEY`, `PROXY_TIMEOUT_MS`, optional `AGENT_PROXY_TIMEOUT_MS` and
+`REQUEST_TIMEOUT_MS`.
 
 **auth** — `PORT`, `MONGODB_URI`, `REDIS_URL`, `INTERNAL_API_KEY`, `JWT_SECRET`,
-`JWT_REFRESH_SECRET`, optional `COOKIE_DOMAIN`, `CREDIT_RESET_HOURS`,
+`JWT_REFRESH_SECRET`, optional `COOKIE_SECURE` / `COOKIE_SAMESITE` /
+`COOKIE_DOMAIN` (defaults: Secure in production, `lax`), `CREDIT_RESET_HOURS`,
 `CREDIT_RESET_AMOUNT`, `FRONTEND_URL` (reset links), one of
 `FIREBASE_SERVICE_ACCOUNT`, `FIREBASE_SERVICE_ACCOUNT_BASE64`, or the local
 `serviceAccountKey.json` (git-ignored), and `SMTP_HOST`, `SMTP_PORT`,
@@ -348,62 +360,62 @@ components, loading/empty/error states, and the protected-route guard.
 
 ---
 
-## Deployment plan (document only — no Docker/AWS yet)
+## Deployment
 
-The code is ready for the next step; nothing container-related is created here.
+Full instructions — build commands, per-service env tables, Secrets Manager vs
+plain task env, ALB/CloudFront settings, and the post-deploy checklist — live in
+**[DEPLOY.md](DEPLOY.md)**. The short version:
 
-1. **Local parity** — a future `docker-compose.yml` at `backend/` can run
-   `mongo`, `redis`, the gateway and four services, with `env_file` per service
-   and `depends_on: [mongo, redis]`. Health checks map to each `/health`.
-2. **Images** — one Dockerfile per service, build context `backend/` so
-   `shared/` is copied in; `CMD ["npm","start","--workspace=@quorvexai/<svc>"]`,
-   `EXPOSE` the service port, run as a non-root user.
-3. **ECR** — tag `<service>:<git-sha>` and push all five images.
-4. **ECS Fargate + ALB** — one task definition per service, ALB target group
-   health check `GET /health` (expect 200), `/api/*` routed to the gateway,
-   secrets from SSM/Secrets Manager (`FIREBASE_SERVICE_ACCOUNT_BASE64`,
-   `RAZORPAY_KEY_SECRET`, provider keys, `INTERNAL_API_KEY`).
-5. **Frontend** — `npm run build`, publish `frontend/dist` to S3 + CloudFront,
-   set `VITE_SERVER_URL` to the ALB DNS name at build time.
-6. **GitHub Actions** — lint → test → build → push ECR → `aws ecs update-service
---force-new-deployment`, with a manual approval gate for production.
+1. **Images** — one `Dockerfile` per service, build context `backend/`:
+   `docker build -f services/auth/Dockerfile -t quorvex-auth .`. Pinned to
+   `node:22-alpine` (production dependencies require Node ≥ 22), multi-stage,
+   `npm ci --omit=dev`, non-root, exec-form `CMD`, and each image contains only
+   `shared/` plus its own service.
+2. **ECR + ECS Fargate** — tag images with the commit SHA. Health check path is
+   **`/live`**; the gateway alone is attached to the public ALB listener, and
+   the services are reached over Service Connect (`http://auth:8001`).
+3. **CloudFront + S3** — one distribution: `default` → S3 (the SPA), `/api/*` →
+   the ALB with caching disabled and cookies/`Origin` forwarded. Add a custom
+   error response (403/404 → `/index.html`, 200) or deep links 404 on reload.
+4. **Frontend** — `cd frontend && npm run build`, then sync `dist/` to S3. Leave
+   `VITE_SERVER_URL` empty so the app calls `/api/*` on its own origin; that
+   keeps the session cookies first-party and needs no CORS preflight.
 
 ---
 
-## Deployment readiness
+## Deployment guarantees
 
-No container or cloud files are created by this project (see the plan above);
-what the code guarantees when you deploy it yourself:
+What the code enforces, so a deployment cannot repeat the old failures:
 
-- **No hardcoded localhost** — service URLs, ports, CORS origins, Mongo/Redis
-  URIs and the frontend API URL all come from env vars. The `127.0.0.1` service
-  defaults and the dev CORS origins only apply while `NODE_ENV !== "production"`,
-  where a missing `AUTH_SERVICE` (etc.) or empty `FRONTEND_URL` fails loudly / logs
-  a warning instead of silently calling localhost.
-- **`GET /health` on every service** — status, uptime, Mongo and Redis state, plus
-  upstream checks on the gateway and provider-key checks on the agent; **503**
-  when a required dependency is down.
-- **Graceful shutdown** — every service closes the HTTP server and the Mongo and
-  Redis connections on `SIGTERM`/`SIGINT`.
-- **Behind a load balancer** — `app.set("trust proxy", 1)` in the gateway and all
-  services, cookie `Secure` in production, optional `COOKIE_DOMAIN`, `SameSite=Lax`
-  and `credentials: true` CORS for a split frontend/API origin.
-- **Ports** — every service listens on `process.env.PORT` (gateway 8000, auth
-  8001, chat 8002, agent 8003, billing 8004 by default).
-- **`/shared`** — services import `../../shared/*` relative to the service folder,
-  so the build context is `backend/`, not the individual service.
-- **Structured logs** — pino JSON with the request ID forwarded from the gateway
-  (`x-request-id`), cookie/authorization/token/signature redaction, and no secrets
-  or passwords in any log line.
-- **Version pinning** — `"engines": { "node": ">=20.10.0" }` in `backend/` and
-  `frontend/`, plus a root `.nvmrc`.
-- **Static frontend** — `npm run build` emits `frontend/dist`, which is served by
-  any static host with the API base URL baked in at build time. A production
-  build **fails** when `VITE_SERVER_URL` is unset, so a bundle can never silently
-  point at a developer machine, and warns when it still points at localhost.
+- **Nothing waits forever.** Redis connects and commands are bounded
+  (`REDIS_CONNECT_TIMEOUT_MS` / `REDIS_COMMAND_TIMEOUT_MS`, 4 s), Mongo selection
+  and buffering are bounded, every request has a budget that turns a stuck
+  handler into a logged `503 REQUEST_TIMEOUT`, and a cache that is down fails
+  fast with `503 REDIS_UNAVAILABLE` instead of hanging. This was the bug that
+  took authentication offline: an unbounded Redis handshake wedged every POST
+  while GET/OPTIONS kept working.
+- **`GET /live` on every service** — dependency-free liveness for the ALB/ECS.
+  `GET /health` reports state but always answers 200; deep probes live behind
+  `?deep=1`.
+- **Correct proxy behaviour** — the gateway never parses a body
+  (`parseReqBody: false`) so POST/multipart bodies reach the upstream intact, it
+  streams responses, and upstream failures become JSON `503`/`504` inside a 60 s
+  budget. Agent runs stream heartbeats so CloudFront's 30 s and the ALB's 60 s
+  timeouts do not cut them.
+- **Graceful shutdown** — shared `startServer` binds `0.0.0.0:${PORT}`, sets
+  `keepAliveTimeout=65s` / `headersTimeout=66s` (above the ALB's 60 s), and on
+  `SIGTERM` drains, closes Mongo/Redis and exits within the ECS stop timeout.
+- **No hardcoded hosts** — service URLs, ports, CORS origins and the frontend
+  API base all come from env vars. `127.0.0.1` defaults and localhost CORS
+  origins only apply while `NODE_ENV !== "production"`.
+- **Startup validation** — `validateEnv()` fails the boot on missing/invalid
+  required variables (names only, never values) and warns about optional ones.
+- **Structured logs** — pino JSON with `x-request-id` forwarded across services,
+  cookie/authorization/token/signature redaction, and a startup line naming the
+  service, version, port and pid.
 - **No stack traces** — `errorHandler` returns
-  `{ success: false, error: { code, message }, requestId }`; 5xx responses always
-  carry a generic message, so internal details never reach a client.
+  `{ success: false, error: { code, message }, requestId }`; unknown 5xx errors
+  keep a generic message, while deliberate 503/504s say what to retry.
 
 ---
 
@@ -422,15 +434,18 @@ what the code guarantees when you deploy it yourself:
 3. **Rotate** anything that was ever written to a `.env` that could have been
    shared: the Mongo DB password, the Firebase service-account key, the
    Razorpay secret, every provider API key, and the old `INTERNAL_API_KEY`.
-4. **Origins** — set `FRONTEND_URL` on the gateway to the deployed frontend
-   origin(s), comma-separated, no trailing slash. `http://localhost:4173` is only
-   there so `npm run preview` can talk to the API locally.
-5. **NODE_ENV=production** — enables `Secure` cookies, requires the JWT and
-   service-URL variables, and turns the gateway's localhost defaults off.
-6. **Frontend** — `cd frontend && npm run build` with `VITE_SERVER_URL` set to
-   the deployed API origin, then serve `dist/` from any static host.
-7. **Check `/health`** on all five services once deployed; the gateway's `/health`
-   also reports every upstream as `up`/`degraded`/`down`.
+4. **Origins** — set `FRONTEND_URL` on the gateway and auth service to the
+   deployed origin(s), comma-separated, no quotes or trailing slash. `localhost`
+   origins are ignored in production.
+5. **NODE_ENV=production** — enables `Secure` cookies, requires the JWT, service
+   URL and `INTERNAL_API_KEY` variables, and turns the localhost defaults off.
+   Set `COOKIE_SAMESITE=none` only if the SPA and API are on different sites.
+6. **Frontend** — `cd frontend && npm run build` with `VITE_SERVER_URL` **empty**
+   for the same-origin CloudFront setup (or an absolute API URL), then sync
+   `dist/` to the S3 bucket.
+7. **Check `/live`** on all five services (ECS/ALB path), then
+   `curl https://<app>/health?deep=1` on the gateway and confirm every upstream
+   is `up`.
 
 ---
 

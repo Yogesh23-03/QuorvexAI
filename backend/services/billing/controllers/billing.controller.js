@@ -95,11 +95,17 @@ export async function verifyPayment(req, res) {
     return res.status(200).json({ success: true, message: "Payment already processed" });
   }
 
+  // A payment verification that waits forever leaves the order stuck in
+  // "processing"; the upgrade call is therefore bounded.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+
   try {
     const response = await fetch(`${serviceUrl("AUTH_SERVICE")}/update-plan`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "x-request-id": req.id,
         ...(process.env.INTERNAL_API_KEY ? { "x-internal-key": process.env.INTERNAL_API_KEY } : {}),
       },
       body: JSON.stringify({
@@ -107,6 +113,7 @@ export async function verifyPayment(req, res) {
         plan: claimed.plan,
         credits: claimed.credits,
       }),
+      signal: controller.signal,
     });
 
     if (!response.ok) {
@@ -127,7 +134,16 @@ export async function verifyPayment(req, res) {
       { orderId: razorpay_order_id, status: "processing" },
       { $set: { status: "failed", failureReason: error.message } },
     );
+    if (error.name === "AbortError") {
+      throw new ApiError(
+        504,
+        "The plan upgrade timed out. Please retry the payment.",
+        "UPGRADE_TIMEOUT",
+      );
+    }
     throw error;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
